@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Wheel dashboard</title>
+<style>
+:root{
+  --asphalt:#13171b; --panel:#1b2127; --line:#2c353d;
+  --paint:#eceae2; --muted:#8a95a0;
+  --go:#3ddc84; --stop:#ff5444; --steer:#58c6ff; --cone:#ff8a1f; --warn:#ffc933;
+  --num:"Bahnschrift","DIN Alternate","Arial Narrow","Segoe UI",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--asphalt);color:var(--paint);
+  font:15px/1.45 "Segoe UI",system-ui,sans-serif}
+h1,h2{font-family:var(--num);font-weight:600;margin:0}
+h1{font-size:26px;letter-spacing:.5px}
+h2{font-size:15px;color:var(--muted);margin-bottom:10px;font-weight:500}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;
+  padding:16px 24px;border-bottom:1px solid var(--line)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.chip{display:flex;align-items:center;gap:8px;padding:6px 12px;
+  border:1px solid var(--line);border-radius:99px;background:var(--panel);font-size:14px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--stop)}
+.chip.ok .dot{background:var(--go)}
+.chip.wait .dot{background:var(--warn)}
+main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:18px;
+  padding:18px 24px;max-width:1200px;margin:0 auto}
+.col{display:flex;flex-direction:column;gap:18px;min-width:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.num{font-family:var(--num);font-variation-settings:"wdth" 80;font-variant-numeric:tabular-nums}
+
+/* pairing */
+.code{font-size:54px;letter-spacing:.18em;line-height:1;margin:2px 0 12px;padding-left:.18em}
+.panel.paired .code{color:var(--muted);font-size:30px}
+.addr{margin:3px 0;color:var(--muted);font-size:14px}
+.addr b{color:var(--paint);font-weight:600}
+code{font-family:Consolas,monospace;font-size:13px;background:var(--asphalt);
+  padding:1px 6px;border-radius:4px;color:var(--paint)}
+
+/* wheel + pedals */
+.rig{display:flex;align-items:flex-end;gap:18px}
+#wheel{width:200px;height:200px;flex:none}
+.pedals{display:flex;gap:12px;flex:1;height:200px;justify-content:center}
+.pedal{display:flex;flex-direction:column;align-items:center;gap:6px;width:56px}
+.bar{flex:1;width:100%;background:var(--asphalt);border:1px solid var(--line);
+  border-radius:8px;position:relative;overflow:hidden}
+.fill{position:absolute;left:0;right:0;bottom:0;height:0}
+#thr .fill{background:var(--go)} #brk .fill{background:var(--stop)}
+.pedal span{font-size:13px;color:var(--muted)}
+.pedal .num{font-size:18px;color:var(--paint)}
+.readout{display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:8px}
+.steerval{font-size:30px;color:var(--steer)}
+.gears{display:flex;gap:8px}
+.lamp{padding:4px 10px;border:1px solid var(--line);border-radius:6px;
+  font-size:13px;color:var(--muted)}
+.lamp.on{background:var(--steer);border-color:var(--steer);color:#06222f;font-weight:600}
+
+/* latency */
+.lat{display:flex;align-items:baseline;gap:8px}
+.lat .num{font-size:52px;line-height:1}
+.lat small{color:var(--muted)}
+.lat.good .num{color:var(--go)} .lat.fair .num{color:var(--warn)} .lat.poor .num{color:var(--stop)}
+.stats{display:flex;gap:22px;margin:8px 0 10px;color:var(--muted);font-size:14px}
+.stats .num{color:var(--paint);font-size:18px}
+#spark{width:100%;height:56px;display:block}
+
+/* game */
+.gamewrap{position:relative}
+#game{width:100%;max-width:520px;height:auto;display:block;margin:0 auto;
+  border-radius:8px;background:#0e1114}
+.hud{display:flex;justify-content:center;gap:34px;margin-top:10px}
+.hud div{text-align:center;color:var(--muted);font-size:13px}
+.hud .num{display:block;font-size:26px;color:var(--paint)}
+
+@media (max-width:860px){main{grid-template-columns:1fr;padding:14px}header{padding:14px}.chips{margin-left:0}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sim Wheel</h1>
+  <div class="chips" role="status" aria-live="polite">
+    <div class="chip" id="chipServer"><span class="dot"></span><span id="txtServer">Connecting to server</span></div>
+    <div class="chip" id="chipPhone"><span class="dot"></span><span id="txtPhone">Waiting for phone</span></div>
+    <div class="chip" id="chipVjoy"><span class="dot"></span><span id="txtVjoy">vJoy</span></div>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="panel" id="pairPanel">
+      <h2 id="pairTitle">Pair your phone</h2>
+      <div class="code num" id="code">- - - -</div>
+      <div id="addrs"></div>
+      <p class="addr">USB: run <code id="adbCmd">adb reverse tcp:8080 tcp:8080</code>, no code needed.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Live input</h2>
+      <div class="rig">
+        <svg id="wheel" viewBox="-110 -110 220 220" aria-label="Steering wheel">
+          <path d="M0 -108 l6 -9 h-12z" fill="#8a95a0" transform="translate(0 6)"/>
+          <g id="wheelRot">
+            <circle r="86" fill="none" stroke="#eceae2" stroke-width="14"/>
+            <path d="M-78 0 H78 M0 0 V80" stroke="#eceae2" stroke-width="12" stroke-linecap="round"/>
+            <circle r="20" fill="#1b2127" stroke="#eceae2" stroke-width="6"/>
+            <rect x="-6" y="-95" width="12" height="18" rx="2" fill="#ff5444"/>
+          </g>
+        </svg>
+        <div class="pedals">
+          <div class="pedal" id="brk"><div class="bar"><div class="fill"></div></div><span>Brake</span><span class="num" id="brkVal">0%</span></div>
+          <div class="pedal" id="thr"><div class="bar"><div class="fill"></div></div><span>Throttle</span><span class="num" id="thrVal">0%</span></div>
+        </div>
+      </div>
+      <div class="readout">
+        <div><span class="num steerval" id="steerVal">0.00</span> <span class="addr">steering</span></div>
+        <div class="gears"><span class="lamp" id="gDown">Gear down</span><span class="lamp" id="gUp">Gear up</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Latency</h2>
+      <div class="lat" id="lat"><span class="num" id="rtt">--</span><small>ms round trip</small></div>
+      <div class="stats">
+        <div><span class="num" id="jit">--</span> ms jitter</div>
+        <div><span class="num" id="hz">0</span> packets/s</div>
+      </div>
+      <canvas id="spark" width="340" height="56"></canvas>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel">
+      <h2>Test drive</h2>
+      <div class="gamewrap"><canvas id="game" width="420" height="560"></canvas></div>
+      <div class="hud">
+        <div><span class="num" id="spd">0</span>km/h</div>
+        <div><span class="num" id="dist">0</span>metres</div>
+        <div><span class="num" id="hits">0</span>cones hit</div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const S = {server:false, phone:false, mode:null, vjoy:false, hz:0,
+  steering:0, throttle:0, brake:0, gearUp:0, gearDown:0, rtt:null, jitter:null};
+const rtts = [];
+
+/* ---------- connection to the server, with automatic reconnect ---------- */
+let dashWs = null;
+function triggerObstacleHaptic(duration = 200){
+  if (dashWs && dashWs.readyState === WebSocket.OPEN){
+    try {
+      dashWs.send(JSON.stringify({type: 'vibrate', duration: duration}));
+    } catch(e){}
+  }
+  if (navigator.vibrate){
+    try { navigator.vibrate(duration); } catch(e){}
+  }
+}
+
+function connect(){
+  dashWs = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws/dashboard`);
+  dashWs.onopen = () => { S.server = true; };
+  dashWs.onclose = () => { S.server = false; S.phone = false; zeroInput(); dashWs = null; setTimeout(connect, 1000); };
+  dashWs.onmessage = e => handle(JSON.parse(e.data));
+}
+function zeroInput(){ S.steering = S.throttle = S.brake = 0; }
+function handle(m){
+  if (m.type === 'hello'){
+    const addrs = m.addresses || m.ips || [];
+    $('code').textContent = m.code ? m.code.split('').join(' ') : '- - - -';
+    $('adbCmd').textContent = `adb reverse tcp:${m.port} tcp:${m.port}`;
+    $('addrs').innerHTML = addrs.length
+      ? addrs.map(a => `<p class="addr">Wi-Fi: <b>${a}:${m.port}</b></p>`).join('')
+      : '<p class="addr">No Wi-Fi address found. Use USB mode.</p>';
+    S.vjoy = m.vjoy !== undefined ? m.vjoy : (m.status ? m.status.vjoy : false);
+    S.phone = m.phone !== undefined ? m.phone : (m.status ? m.status.connected : false);
+    S.mode = m.mode !== undefined ? m.mode : (m.status ? m.status.mode : null);
+    S.hz = m.hz !== undefined ? m.hz : (m.status ? m.status.hz : 0);
+  } else if (m.type === 'status'){
+    S.phone = m.connected !== undefined ? m.connected : m.phone;
+    S.mode = m.mode;
+    S.hz = m.hz;
+    if (!S.phone){ S.rtt = S.jitter = null; rtts.length = 0; }
+  } else if (m.type === 'input'){
+    S.steering = m.steering; S.throttle = m.throttle; S.brake = m.brake;
+    const t = performance.now();
+    if (m.gear_up) S.gearUp = t;
+    if (m.gear_down) S.gearDown = t;
+  } else if (m.type === 'latency'){
+    S.rtt = m.rtt; S.jitter = m.jitter;
+    rtts.push(m.rtt); if (rtts.length > 60) rtts.shift();
+  }
+}
+
+/* ---------- rendering ---------- */
+function chip(id, txtId, cls, text){
+  $(id).className = 'chip ' + cls; $(txtId).textContent = text;
+}
+function render(){
+  chip('chipServer','txtServer', S.server ? 'ok' : 'wait', S.server ? 'Server connected' : 'Server lost, retrying');
+  chip('chipPhone','txtPhone', S.phone ? 'ok' : 'wait',
+       S.phone ? `Phone connected via ${S.mode === 'usb' ? 'USB' : 'Wi-Fi'}` : 'Waiting for phone');
+  chip('chipVjoy','txtVjoy', S.vjoy ? 'ok' : '', S.vjoy ? 'vJoy sending to games' : 'vJoy off');
+  $('pairPanel').classList.toggle('paired', S.phone);
+  $('pairTitle').textContent = S.phone ? 'Phone paired' : 'Pair your phone';
+
+  $('wheelRot').setAttribute('transform', `rotate(${S.steering * 90})`);
+  $('steerVal').textContent = S.steering.toFixed(2);
+  $('thr').querySelector('.fill').style.height = (S.throttle * 100) + '%';
+  $('brk').querySelector('.fill').style.height = (S.brake * 100) + '%';
+  $('thrVal').textContent = Math.round(S.throttle * 100) + '%';
+  $('brkVal').textContent = Math.round(S.brake * 100) + '%';
+  const now = performance.now();
+  $('gUp').classList.toggle('on', now - S.gearUp < 250);
+  $('gDown').classList.toggle('on', now - S.gearDown < 250);
+
+  $('rtt').textContent = S.rtt == null ? '--' : S.rtt.toFixed(0);
+  $('jit').textContent = S.jitter == null ? '--' : S.jitter.toFixed(1);
+  $('hz').textContent = S.hz;
+  $('lat').className = 'lat ' + (S.rtt == null ? '' : S.rtt < 25 ? 'good' : S.rtt < 60 ? 'fair' : 'poor');
+  drawSpark();
+}
+
+const sp = $('spark'), sx = sp.getContext('2d');
+function drawSpark(){
+  const w = sp.width, h = sp.height;
+  sx.clearRect(0, 0, w, h);
+  sx.strokeStyle = '#2c353d'; sx.lineWidth = 1;
+  sx.beginPath(); sx.moveTo(0, h - .5); sx.lineTo(w, h - .5); sx.stroke();
+  if (rtts.length < 2) return;
+  const max = Math.max(50, ...rtts);
+  sx.strokeStyle = '#58c6ff'; sx.lineWidth = 2; sx.beginPath();
+  rtts.forEach((v, i) => {
+    const x = i / 59 * w, y = h - 4 - (v / max) * (h - 8);
+    i ? sx.lineTo(x, y) : sx.moveTo(x, y);
+  });
+  sx.stroke();
+}
+
+/* ---------- test-drive game: steer with tilt, throttle/brake with pedals ---------- */
+const g = $('game'), gx = g.getContext('2d');
+const W = g.width, H = g.height, ROAD_L = 60, ROAD_R = W - 60, CAR_Y = H - 110;
+const G = {speed:0, dist:0, hits:0, cones:[], spawn:1, stripe:0, flash:0, carX:W/2};
+
+function stepGame(dt){
+  const on = S.phone;
+  const thr = on ? S.throttle : 0, brk = on ? S.brake : 0;
+  G.speed += (thr * 220 - G.speed) * Math.min(1, dt * 0.9);
+  G.speed -= brk * dt * 260;
+  if (thr === 0) G.speed *= Math.max(0, 1 - dt * 0.25);
+  if (G.speed < 0.5) G.speed = 0;
+
+  const px = G.speed * 2.2;
+  G.dist += G.speed / 3.6 * dt;
+  G.stripe = (G.stripe + px * dt) % 80;
+  G.carX = W/2 + (on ? S.steering : 0) * ((ROAD_R - ROAD_L)/2 - 24);
+
+  G.spawn -= dt * (G.speed > 5 ? 1 : 0);
+  if (G.spawn <= 0){
+    G.cones.push({x: ROAD_L + 24 + Math.random() * (ROAD_R - ROAD_L - 48), y: -30});
+    G.spawn = 0.8 + Math.random() * 1.2;
+  }
+  G.cones.forEach(c => c.y += px * dt);
+  G.cones = G.cones.filter(c => {
+    if (Math.abs(c.x - G.carX) < 28 && Math.abs(c.y - CAR_Y) < 42){
+      G.speed *= 0.35; G.flash = 0.35; G.hits++;
+      triggerObstacleHaptic(220);
+      return false;
+    }
+    return c.y < H + 30;
+  });
+  G.flash = Math.max(0, G.flash - dt);
+}
+
+function drawGame(){
+  gx.fillStyle = '#0e1114'; gx.fillRect(0, 0, W, H);
+  gx.fillStyle = '#242b32'; gx.fillRect(ROAD_L, 0, ROAD_R - ROAD_L, H);
+  for (let y = -80 + G.stripe; y < H; y += 80){          // curbs
+    const red = Math.round((y - G.stripe) / 80) % 2 === 0;
+    gx.fillStyle = red ? '#ff5444' : '#eceae2';
+    gx.fillRect(ROAD_L - 12, y, 12, 40); gx.fillRect(ROAD_R, y, 12, 40);
+    gx.fillStyle = red ? '#eceae2' : '#ff5444';
+    gx.fillRect(ROAD_L - 12, y + 40, 12, 40); gx.fillRect(ROAD_R, y + 40, 12, 40);
+  }
+  gx.fillStyle = '#6f7a84';                               // centre dashes
+  for (let y = -80 + G.stripe; y < H; y += 80) gx.fillRect(W/2 - 3, y, 6, 40);
+
+  gx.fillStyle = '#ff8a1f';                               // cones
+  G.cones.forEach(c => { gx.beginPath(); gx.moveTo(c.x, c.y - 16); gx.lineTo(c.x + 14, c.y + 14);
+    gx.lineTo(c.x - 14, c.y + 14); gx.closePath(); gx.fill(); });
+
+  gx.fillStyle = '#58c6ff';                               // car
+  gx.beginPath(); gx.roundRect(G.carX - 22, CAR_Y - 40, 44, 80, 8); gx.fill();
+  gx.fillStyle = '#0e1114'; gx.fillRect(G.carX - 15, CAR_Y - 22, 30, 16);
+  gx.fillStyle = S.brake > 0.05 ? '#ff5444' : '#7a2a24';  // brake lights
+  gx.fillRect(G.carX - 18, CAR_Y + 33, 10, 5); gx.fillRect(G.carX + 8, CAR_Y + 33, 10, 5);
+
+  if (G.flash > 0){ gx.fillStyle = `rgba(255,84,68,${G.flash})`; gx.fillRect(0, 0, W, H); }
+  if (!S.phone){
+    gx.fillStyle = 'rgba(14,17,20,.72)'; gx.fillRect(0, 0, W, H);
+    gx.fillStyle = '#eceae2'; gx.textAlign = 'center';
+    gx.font = '600 26px Bahnschrift, Segoe UI, sans-serif';
+    gx.fillText('Waiting for phone', W/2, H/2 - 6);
+    gx.font = '15px Segoe UI, sans-serif'; gx.fillStyle = '#8a95a0';
+    gx.fillText('Tilt to steer, use the pedals to drive', W/2, H/2 + 22);
+  }
+  $('spd').textContent = Math.round(G.speed);
+  $('dist').textContent = Math.round(G.dist);
+  $('hits').textContent = G.hits;
+}
+
+let last = performance.now();
+function frame(t){
+  const dt = Math.min(0.05, (t - last) / 1000); last = t;
+  stepGame(dt); drawGame(); render();
+  requestAnimationFrame(frame);
+}
+connect();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
