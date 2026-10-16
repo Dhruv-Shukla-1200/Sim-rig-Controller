@@ -12,12 +12,13 @@ def start_server():
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen(1)
-    server.settimeout(1.0)
+    server.settimeout(1.0)  # wake up every 1s instead of blocking forever (allows Ctrl+C)
     print(f"Listening on {HOST}:{PORT}...")
     return server
 
 
 def wait_for_connection(server):
+    """Block until a client connects, retrying on timeout. Returns (conn, addr)."""
     while True:
         try:
             conn, addr = server.accept()

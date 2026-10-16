@@ -17,3 +17,9 @@ AXIS_CENTER = 0x4000
 BUTTON_GEAR_UP = 1
 BUTTON_GEAR_DOWN = 2
 BUTTON_HANDBRAKE = 3
+
+# --- ADB / Android ---
+ADB_PATH = r"C:\Users\DHRUV\AppData\Local\platform-tools\adb.exe"
+TCP_PORT = PORT            # reuse the existing PORT value for adb reverse
+ANDROID_PACKAGE = "com.example.simwheel"
+ANDROID_ACTIVITY = ".MainActivity"
