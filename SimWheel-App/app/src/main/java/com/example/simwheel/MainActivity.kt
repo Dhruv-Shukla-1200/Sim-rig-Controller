@@ -22,9 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.util.Locale
 
 private val AppBackground = Color(0xFF0B1016)
@@ -35,6 +39,7 @@ private val AccentBlue = Color(0xFF58C6FF)
 class MainActivity : ComponentActivity() {
 
     private lateinit var steeringSensor: SteeringSensor
+    private lateinit var dropDetector: DropDetector
     private val wheelState = SimWheelState()
     private lateinit var networkClient: NetworkClient
 
@@ -48,7 +53,11 @@ class MainActivity : ComponentActivity() {
         val initialMode = if (prefs.getString("mode", "USB") == "WIFI") ConnectionMode.WIFI else ConnectionMode.USB
 
         steeringSensor = SteeringSensor(this)
-        networkClient = NetworkClient(wheelState, steeringSensor.steering).apply {
+        dropDetector = DropDetector(this).apply {
+            // On a detected drop, also put the on-screen controls back to neutral.
+            onDrop = { wheelState.releaseAll() }
+        }
+        networkClient = NetworkClient(wheelState, steeringSensor.steering, dropDetector.locked).apply {
             mode = initialMode
             wifiAddress = initialAddress
             onVibrate = { duration -> triggerVibration(duration) }
@@ -70,10 +79,25 @@ class MainActivity : ComponentActivity() {
                 val connected by networkClient.connected.collectAsState()
                 val latency by networkClient.latencyMs.collectAsState()
                 val errorMsg by networkClient.connectionError.collectAsState()
+                val dropLocked by dropDetector.locked.collectAsState()
 
                 var currentMode by remember { mutableStateOf(initialMode) }
                 var addressText by remember { mutableStateOf(initialAddress) }
                 var codeText by remember { mutableStateOf("") }
+                var showConnectionMenu by remember { mutableStateOf(false) }
+
+                val statusText = when {
+                    dropLocked -> "Drop detected · inputs released"
+                    connected -> "Connected · ${if (currentMode == ConnectionMode.USB) "USB" else "Wi-Fi"}"
+                    errorMsg != null -> errorMsg!!.take(32)
+                    else -> "Waiting for controller…"
+                }
+                val statusColor = when {
+                    dropLocked -> Color(0xFFFF7C83)
+                    connected -> Color(0xFF75E6C2)
+                    errorMsg != null -> Color(0xFFFF7C83)
+                    else -> Color(0xFFFFD18A)
+                }
 
                 fun saveAndApplyConnection(newMode: ConnectionMode, newAddress: String, newCode: String) {
                     prefs.edit()
@@ -84,6 +108,107 @@ class MainActivity : ComponentActivity() {
                     networkClient.wifiAddress = newAddress
                     networkClient.pairCode = newCode
                     networkClient.start()
+                }
+
+                if (showConnectionMenu) {
+                    Dialog(
+                        onDismissRequest = { showConnectionMenu = false },
+                        properties = DialogProperties(usePlatformDefaultWidth = false)
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(0.78f),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = PanelColor)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("CONNECTION", color = MutedText, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                                    Text(
+                                        "CLOSE",
+                                        color = AccentBlue,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { showConnectionMenu = false }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                // USB / Wi-Fi selector
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(Color(0xFF1B2631))
+                                        .padding(4.dp),
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    ModePill("USB", currentMode == ConnectionMode.USB, compact = false) {
+                                        currentMode = ConnectionMode.USB
+                                        saveAndApplyConnection(ConnectionMode.USB, addressText, codeText)
+                                    }
+                                    ModePill("Wi-Fi", currentMode == ConnectionMode.WIFI, compact = false) {
+                                        currentMode = ConnectionMode.WIFI
+                                        saveAndApplyConnection(ConnectionMode.WIFI, addressText, codeText)
+                                    }
+                                }
+
+                                if (currentMode == ConnectionMode.WIFI) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedTextField(
+                                            value = addressText,
+                                            onValueChange = { addressText = it },
+                                            label = { Text("Laptop IP:Port", fontSize = 10.sp) },
+                                            placeholder = { Text("192.168.1.X:8080", fontSize = 10.sp) },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1.35f),
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        OutlinedTextField(
+                                            value = codeText,
+                                            onValueChange = { if (it.length <= 4 && it.all(Char::isDigit)) codeText = it },
+                                            label = { Text("Pair code", fontSize = 10.sp) },
+                                            placeholder = { Text("1234", fontSize = 10.sp) },
+                                            singleLine = true,
+                                            modifier = Modifier.weight(0.7f),
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        Button(
+                                            onClick = {
+                                                saveAndApplyConnection(ConnectionMode.WIFI, addressText, codeText)
+                                                showConnectionMenu = false
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) { Text("JOIN", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                                    }
+                                } else {
+                                    Text(
+                                        "Run  adb reverse tcp:8080 tcp:8080  on the laptop, then the phone connects over the cable. No code needed.",
+                                        color = MutedText,
+                                        fontSize = 11.sp
+                                    )
+                                }
+
+                                Text(statusText, color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
                 }
 
                 BoxWithConstraints(
@@ -97,7 +222,7 @@ class MainActivity : ComponentActivity() {
                     val compact = maxWidth < 650.dp
                     val pedalWidth = if (compact) 62.dp else 82.dp
                     val gearWidth = if (compact) 70.dp else 88.dp
-                    val gearHeight = (maxHeight * 0.60f).coerceIn(112.dp, 176.dp)
+                    val gearHeight = (maxHeight * 0.50f).coerceIn(96.dp, 150.dp)
 
                     Row(
                         modifier = Modifier.fillMaxSize(),
@@ -112,11 +237,21 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.width(pedalWidth).fillMaxHeight(0.94f)
                         )
 
-                        GearButton(
-                            label = "Gear Down",
-                            onPulse = { wheelState.gearDown.value = it },
-                            modifier = Modifier.width(gearWidth).height(gearHeight)
-                        )
+                        Column(
+                            modifier = Modifier.width(gearWidth),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            GearButton(
+                                label = "Gear Down",
+                                onPulse = { wheelState.gearDown.value = it },
+                                modifier = Modifier.fillMaxWidth().height(gearHeight)
+                            )
+                            HandbrakeButton(
+                                onHold = { wheelState.handbrake.value = it },
+                                modifier = Modifier.fillMaxWidth().height(48.dp)
+                            )
+                        }
 
                         Column(
                             modifier = Modifier
@@ -126,16 +261,21 @@ class MainActivity : ComponentActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.SpaceBetween
                         ) {
-                            // Compact branding/header, without taking valuable space away from controls.
+                            // Header: menu button, title, online chip
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Column {
-                                    Text("SIMWHEEL", color = Color.White, fontSize = if (compact) 17.sp else 21.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp)
-                                    Text("PHONE RACING CONTROLLER", color = MutedText, fontSize = 8.sp, letterSpacing = 1.2.sp)
-                                }
+                                MenuButton(onClick = { showConnectionMenu = true })
+                                Text(
+                                    "SIMWHEEL",
+                                    color = Color.White,
+                                    fontSize = if (compact) 16.sp else 19.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 1.5.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
                                 Row(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(50))
@@ -149,92 +289,26 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            // USB / Wi-Fi selector
-                            Row(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFF1B2631))
-                                    .padding(4.dp),
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                ModePill("USB", currentMode == ConnectionMode.USB, compact) {
-                                    currentMode = ConnectionMode.USB
-                                    saveAndApplyConnection(ConnectionMode.USB, addressText, codeText)
-                                }
-                                ModePill("Wi-Fi", currentMode == ConnectionMode.WIFI, compact) {
-                                    currentMode = ConnectionMode.WIFI
-                                    saveAndApplyConnection(ConnectionMode.WIFI, addressText, codeText)
-                                }
-                            }
-
-                            if (currentMode == ConnectionMode.WIFI) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedTextField(
-                                        value = addressText,
-                                        onValueChange = { addressText = it },
-                                        label = { Text("Laptop IP:Port", fontSize = 10.sp) },
-                                        placeholder = { Text("192.168.1.X:8080", fontSize = 10.sp) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1.35f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    OutlinedTextField(
-                                        value = codeText,
-                                        onValueChange = { if (it.length <= 4 && it.all(Char::isDigit)) codeText = it },
-                                        label = { Text("Pair code", fontSize = 10.sp) },
-                                        placeholder = { Text("1234", fontSize = 10.sp) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(0.7f),
-                                        textStyle = LocalTextStyle.current.copy(fontSize = 12.sp),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    Button(
-                                        onClick = { saveAndApplyConnection(ConnectionMode.WIFI, addressText, codeText) },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) { Text("JOIN", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
-                                }
-                            }
-
-                            // Live telemetry panel
+                            // Compact live panel: status + ping on one line, then the three readouts
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(18.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(containerColor = PanelColor)
                             ) {
                                 Column(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Column {
-                                            Text("CONNECTION", color = MutedText, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                                            val status = when {
-                                                connected -> "Connected · ${if (currentMode == ConnectionMode.USB) "USB" else "Wi-Fi"}"
-                                                errorMsg != null -> errorMsg!!.take(32)
-                                                else -> "Waiting for controller…"
-                                            }
-                                            Text(status, color = if (connected) Color(0xFF75E6C2) else if (errorMsg != null) Color(0xFFFF7C83) else Color(0xFFFFD18A), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                        }
+                                        Text(statusText, color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                         if (connected && latency != null) {
-                                            Column(horizontalAlignment = Alignment.End) {
-                                                Text("PING", color = MutedText, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                                                Text("${latency!!.toInt()} ms", color = AccentBlue, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                                            }
+                                            Text("${latency!!.toInt()} ms", color = AccentBlue, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
-                                    HorizontalDivider(color = Color(0xFF2B3743))
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -252,7 +326,7 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF253544)),
-                                contentPadding = PaddingValues(vertical = 11.dp)
+                                contentPadding = PaddingValues(vertical = 10.dp)
                             ) {
                                 Text("◎   RECENTER STEERING", color = Color(0xFFD9EAF5), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.7.sp)
                             }
@@ -280,11 +354,14 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         steeringSensor.start()
+        dropDetector.start()
         networkClient.start()
     }
 
     override fun onPause() {
         steeringSensor.stop()
+        dropDetector.stop()
+        wheelState.releaseAll()
         networkClient.stop()
         super.onPause()
     }
@@ -311,6 +388,30 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) {
             // Haptics are optional; a device without a working vibrator can still play.
+        }
+    }
+}
+
+@Composable
+private fun MenuButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF1B2631))
+            .semantics { contentDescription = "Connection settings" }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(3) {
+                Box(
+                    Modifier
+                        .size(width = 18.dp, height = 2.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xFFD9EAF5))
+                )
+            }
         }
     }
 }

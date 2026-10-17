@@ -139,3 +139,46 @@ fun GearButton(
         Text(if (isUp) "SHIFT +" else "SHIFT −", color = Color(0xFF8D9BA9), fontSize = 9.sp, fontWeight = FontWeight.Medium)
     }
 }
+
+/** Press-and-hold handbrake. Sends true while a finger is down, false on release. */
+@Composable
+fun HandbrakeButton(
+    onHold: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnHold by rememberUpdatedState(onHold)
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, label = "handbrakePressScale")
+    val accent = Color(0xFFFF5C67)
+
+    Column(
+        modifier = modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (pressed) Color(0xFF5A2A30) else Color(0xFF202A34))
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    pressed = true
+                    currentOnHold(true)
+                    try {
+                        do {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            change?.consume()
+                        } while (change != null && change.pressed)
+                    } finally {
+                        pressed = false
+                        currentOnHold(false)
+                    }
+                }
+            }
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("HANDBRAKE", color = accent, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
+    }
+}
+
+

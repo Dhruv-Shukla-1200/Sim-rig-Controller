@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aiohttp import WSMsgType, web
+from server.common import adb_utils
 from server.common.config import DEFAULT_WS_PORT, HOST
 from server.common.vjoy_output import VJoyOutput
 
@@ -251,12 +252,60 @@ async def status_loop(hub):
         await hub.broadcast(hub.status())
 
 
+async def adb_watch_loop(port: int, auto_launch: bool):
+    """Keeps the USB tunnel up without any manual adb commands.
+
+    Every few seconds: if a phone is attached and authorised, make sure
+    `adb reverse tcp:<port> tcp:<port>` is active (the tunnel disappears when
+    the cable is unplugged), and open the app the first time the phone appears.
+    All adb calls run in a worker thread so they never block the WebSocket loop.
+    """
+    if not await asyncio.to_thread(adb_utils.adb_available):
+        print("[adb] adb not found: USB auto-setup is off (Wi-Fi mode still works).")
+        print("[adb] Add platform-tools to PATH, or set ADB_PATH in server/common/config.py")
+        return
+
+    last_state = "unknown"
+    last_error = None
+    while True:
+        state = await asyncio.to_thread(adb_utils.device_state)
+        if state != last_state:
+            if state == "device":
+                print("[adb] Phone detected over USB")
+            elif state is None:
+                print("[adb] No phone attached over USB (Wi-Fi mode still works)")
+            elif state == "unauthorized":
+                print("[adb] Phone found but not authorised: accept 'Allow USB debugging?' on the phone")
+            else:
+                print(f"[adb] Phone state: {state}")
+
+        if state == "device":
+            if not await asyncio.to_thread(adb_utils.tunnel_active, port):
+                err = await asyncio.to_thread(adb_utils.reverse_port, port)
+                if err is None:
+                    print(f"[adb] USB tunnel ready (tcp:{port} -> this laptop)")
+                    last_error = None
+                elif err != last_error:
+                    print(f"[adb] adb reverse failed: {err}")
+                    last_error = err
+            if auto_launch and last_state != "device":
+                if await asyncio.to_thread(adb_utils.launch_app):
+                    print("[adb] App launched on phone")
+                else:
+                    print("[adb] Could not launch the app automatically; open it by hand")
+        last_state = state
+        await asyncio.sleep(3)
+
+
 async def background(app):
     hub = app["hub"]
     tasks = [
         asyncio.create_task(ping_loop(hub)),
         asyncio.create_task(status_loop(hub)),
     ]
+    if app["adb_enabled"]:
+        tasks.append(asyncio.create_task(
+            adb_watch_loop(hub.port, app["adb_auto_launch"])))
     yield
     for t in tasks:
         t.cancel()
@@ -268,12 +317,16 @@ def run_ws_server(
     port: int = DEFAULT_WS_PORT,
     code: str = None,
     no_vjoy: bool = False,
+    auto_adb: bool = True,
+    auto_launch: bool = True,
 ):
     pair_code = code or f"{random.randint(0, 9999):04d}"
     hub = Hub(pair_code, VJoyOutput(enabled=not no_vjoy), port)
 
     app = web.Application()
     app["hub"] = hub
+    app["adb_enabled"] = auto_adb
+    app["adb_auto_launch"] = auto_launch
     app.router.add_get("/", index)
     app.router.add_get("/ws/phone", phone_ws)
     app.router.add_get("/ws/dashboard", dashboard_ws)
@@ -285,7 +338,10 @@ def run_ws_server(
     print(f"  Pair code : {pair_code}   (Wi-Fi mode only)")
     for ip in lan_ips():
         print(f"  Wi-Fi addr: {ip}:{port}")
-    print(f"  USB mode  : adb reverse tcp:{port} tcp:{port}")
+    if auto_adb:
+        print("  USB mode  : automatic (plug in the phone, tunnel is set up for you)")
+    else:
+        print(f"  USB mode  : manual, run: adb reverse tcp:{port} tcp:{port}")
     print(f"  vJoy      : {'on' if hub.output.available else 'off'}")
     print("=" * 52)
     try:
@@ -302,5 +358,8 @@ if __name__ == "__main__":
     ap.add_argument("--host", default=HOST)
     ap.add_argument("--code", help="fixed 4-digit pairing code (default: random)")
     ap.add_argument("--no-vjoy", action="store_true", help="run without vJoy")
+    ap.add_argument("--no-adb", action="store_true", help="do not run adb automatically")
+    ap.add_argument("--no-auto-launch", action="store_true", help="do not open the app on the phone")
     args = ap.parse_args()
-    run_ws_server(args.host, args.port, args.code, args.no_vjoy)
+    run_ws_server(args.host, args.port, args.code, args.no_vjoy,
+                  auto_adb=not args.no_adb, auto_launch=not args.no_auto_launch)

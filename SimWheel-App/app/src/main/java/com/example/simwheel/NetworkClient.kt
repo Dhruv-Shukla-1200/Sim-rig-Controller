@@ -25,7 +25,8 @@ enum class ConnectionMode {
 
 class NetworkClient(
     private val wheelState: SimWheelState,
-    private val steering: StateFlow<Float>
+    private val steering: StateFlow<Float>,
+    private val dropLocked: StateFlow<Boolean>
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
@@ -180,12 +181,15 @@ class NetworkClient(
     private fun round3(v: Float): Double = Math.round(v * 1000.0) / 1000.0
 
     private fun buildPacket(): String {
+        // A detected drop (accelerometer free fall) overrides every input with zeros.
+        if (dropLocked.value) return zeroPacket()
         val json = JSONObject()
         json.put("steering", round3(steering.value))
         json.put("throttle", round3(wheelState.throttle.value))
         json.put("brake", round3(wheelState.brake.value))
         json.put("gear_up", wheelState.gearUp.value)
         json.put("gear_down", wheelState.gearDown.value)
+        json.put("handbrake", wheelState.handbrake.value)
         return json.toString()
     }
 
@@ -196,6 +200,7 @@ class NetworkClient(
         json.put("brake", 0.0)
         json.put("gear_up", false)
         json.put("gear_down", false)
+        json.put("handbrake", false)
         return json.toString()
     }
 }

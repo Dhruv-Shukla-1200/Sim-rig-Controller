@@ -24,11 +24,20 @@ Built for the **"Anything but a Game Controller"** project challenge.
 
 ## 1. About the Project
 
-Sim Wheel replaces a traditional gamepad or keyboard with an Android smartphone held in landscape mode like a real steering wheel. The phone's built-in rotation vector sensor drives steering; touch sliders on the left and right edges act as the brake and throttle pedals; and large paddle-style buttons handle gear shifts.
+Sim Wheel replaces a traditional gamepad or keyboard with an Android smartphone held in landscape mode like a real steering wheel. The phone's built-in rotation vector sensor drives steering; touch sliders on the left and right edges act as the brake and throttle pedals; large paddle-style buttons handle gear shifts; and a press-and-hold button works as the handbrake.
 
 The phone streams all inputs over a WebSocket connection to a Python server running on a Windows laptop. The server simultaneously:
 - **Feeds a vJoy virtual joystick driver** so desktop racing titles (Forza Motorsport, Assetto Corsa, Assetto Corsa Competizione, RaceRoom, etc.) read it as a real game controller.
 - **Serves a browser-based dashboard** at `http://localhost:8080` showing live steering angle, pedal bars, latency graphs, gear indicator lights, and a playable top-down canvas racing mini-game.
+
+### How the sensors are used
+
+| Sensor | Used for | How |
+|---|---|---|
+| **Gyroscope + accelerometer (+ magnetometer where present)** | **Steering** | The app reads Android's `TYPE_ROTATION_VECTOR`. Android describes this as a software sensor, usually computed by fusing the gyroscope, accelerometer and magnetometer. The gyroscope gives fast, smooth rotation, and the accelerometer's gravity reading stops it drifting. The app converts the result to a tilt angle with `atan2`. |
+| **Accelerometer (read directly)** | **Drop / free-fall safety** | `DropDetector.kt` listens to `TYPE_ACCELEROMETER`. At rest the magnitude is about 9.8 m/s². In free fall it falls close to zero. If it stays below 2.5 m/s² for 80 ms, the app treats it as a drop, releases all controls and sends all-zero packets for 1.5 s. |
+
+**Why the fused rotation vector instead of hand-filtering the raw gyro and accelerometer?** Android's fusion is tuned per device, and in our tests it gave steady steering with little jitter or drift. A hand-written filter would add code without a clear gain. The raw accelerometer is still read directly where fusion doesn't help: detecting a fall.
 
 ---
 
@@ -38,13 +47,15 @@ The phone streams all inputs over a WebSocket connection to a Python server runn
 
 | Feature | Detail |
 |---|---|
-| **Tilt Steering** | Uses `Sensor.TYPE_ROTATION_VECTOR` + `atan2` over full ±180° range. Stays locked at max (±1.0) past 90° — no fold-back. |
+| **Tilt Steering** | Uses `Sensor.TYPE_ROTATION_VECTOR` (Android's fusion of gyroscope, accelerometer and usually magnetometer) + `atan2` over full ±180° range. Stays locked at max (±1.0) past 90° — no fold-back. |
 | **Auto Re-center** | First sensor reading auto-calibrates neutral. Tap **Recenter Wheel** any time. |
 | **Throttle & Brake Sliders** | Continuous vertical touch sliders. Release = spring-to-zero for stuck throttle prevention. |
 | **Gear Shift Paddles** | Pulse buttons for Gear Up and Gear Down, sent as boolean events. |
+| **Handbrake Button** | Press-and-hold button under Gear Down. Sent as `handbrake` and mapped to vJoy button 3; releasing it releases the handbrake. |
+| **Drop Safety** | Accelerometer free-fall detection. If the phone is dropped or thrown, all inputs are released and zero packets are sent for 1.5 s, and the app shows "Drop detected · inputs released". |
 | **Dual Connection Mode** | Toggle between **USB** (ADB reverse, zero-config) and **Wi-Fi** (4-digit room code pairing). |
 | **Live RTT Display** | Shows round-trip ping in milliseconds on the phone. |
-| **Safety Zero Packet** | On pause or disconnect the app immediately sends all-zeros to prevent stuck throttle. |
+| **Safety Zero Packet** | On pause, disconnect or a detected drop the app immediately sends all-zeros to prevent stuck throttle. |
 | **Vibration Haptics** | Phone vibrates when the car hits an obstacle in the browser mini-game. |
 | **Locked Landscape** | Screen orientation permanently locked to landscape — no accidental rotation. |
 | **Persistent Prefs** | Remembers last Wi-Fi address and connection mode between sessions (`SharedPreferences`). |
@@ -56,6 +67,7 @@ The phone streams all inputs over a WebSocket connection to a Python server runn
 | **Live Steering Wheel** | Rotating SVG wheel mirrors phone tilt in real time. |
 | **Pedal Meters** | Animated vertical fill bars for throttle (green) and brake (red). |
 | **Gear Indicator Lamps** | Light up for 250 ms on each gear shift pulse. |
+| **Handbrake Lamp** | Lights up while the handbrake is held; in the mini-game the handbrake stops the car hard. |
 | **Latency Panel** | Large RTT readout (green/amber/red) + jitter value + rolling 60-sample sparkline graph. |
 | **Connection Status Chips** | Real-time server / phone / vJoy status pills in the header. |
 | **Pairing Panel** | Displays LAN IPs, pair code, and ADB command automatically. |
@@ -65,7 +77,8 @@ The phone streams all inputs over a WebSocket connection to a Python server runn
 
 | Feature | Detail |
 |---|---|
-| **Unified Entry Point** | `python server/main.py --mode ws` or `--mode wired` |
+| **Single Entry Point** | `python server/main.py` starts the dashboard, the phone connection (USB and Wi-Fi) and vJoy together. |
+| **USB Auto-Setup** | While running, the server watches for the phone. Once a phone is attached and authorised it runs `adb reverse tcp:8080 tcp:8080` and opens the app. Unplug and replug is handled automatically. |
 | **WebSocket Hub** | `aiohttp` async WebSocket server — phone and dashboard share one event loop. |
 | **Active Ping/Pong** | Server pings phone every second; computes RTT + jitter; broadcasts to dashboard sparkline. |
 | **Packet Sanitizer** | Validates and clamps all incoming values before they touch vJoy. |
@@ -79,7 +92,7 @@ The phone streams all inputs over a WebSocket connection to a Python server runn
 
 | Layer | Technology |
 |---|---|
-| **Android App** | Kotlin, Jetpack Compose, OkHttp WebSockets, Android Sensor API (`TYPE_ROTATION_VECTOR`) |
+| **Android App** | Kotlin, Jetpack Compose, OkHttp WebSockets, Android Sensor API (`TYPE_ROTATION_VECTOR` for steering, `TYPE_ACCELEROMETER` for drop detection) |
 | **Server** | Python 3.10+, `aiohttp` (async WebSocket + HTTP in one event loop) |
 | **Browser Dashboard & Game** | Vanilla HTML5, CSS3, Canvas 2D API, native WebSockets — zero external dependencies |
 | **PC Game Integration** | `pyvjoy` → vJoy virtual joystick driver (Windows only, optional) |
@@ -95,6 +108,8 @@ The phone streams all inputs over a WebSocket connection to a Python server runn
         |  Rotation Vector Sensor  ->  Steering        |
         |  Touch Vertical Sliders  ->  Throttle/Brake  |
         |  Pulse Paddle Buttons    ->  Gear Up/Down    |
+        |  Hold Button             ->  Handbrake       |
+        |  Accelerometer           ->  Drop safety     |
         |  Vibrator Motor          <-  Haptic Events   |
         +---------------------------------------------+
                              |
@@ -134,13 +149,12 @@ The app features a segmented USB / Wi-Fi toggle. Both modes use the same WebSock
 
 ### Mode A — USB (Recommended, Lowest Latency)
 
-1. Plug the phone into your laptop with a **data USB cable**.
-2. Run once in your terminal:
-   ```powershell
-   adb reverse tcp:8080 tcp:8080
-   ```
-3. In the SimWheel app tap **USB** on the top toggle.
+1. Plug the phone into your laptop with a **data USB cable** (USB debugging on, see Step 4).
+2. Start the server. It detects the phone, runs `adb reverse tcp:8080 tcp:8080` for you, and opens the app on the phone. You type no adb commands. If you unplug and replug, it sets the tunnel up again.
+3. In the SimWheel app tap **☰** and choose **USB**.
 4. The phone connects to `127.0.0.1:8080`. The server auto-identifies loopback — **no code needed**.
+
+> **Manual fallback:** start the server with `--no-adb` and run `adb reverse tcp:8080 tcp:8080` yourself. USB mode expects the default port 8080.
 
 > **Why it's faster:** data never leaves the USB cable. No Wi-Fi stack, no router, no RF. Typical RTT ≈ 2–5 ms.
 
@@ -148,7 +162,7 @@ The app features a segmented USB / Wi-Fi toggle. Both modes use the same WebSock
 
 1. Make sure your phone and laptop are on the **same Wi-Fi network**.
 2. Start the server — it prints the laptop's LAN IP(s) and a random 4-digit pair code.
-3. In the SimWheel app tap **Wi-Fi**, enter the laptop IP (e.g. `192.168.1.15:8080`) and the 4-digit code.
+3. In the SimWheel app tap **☰**, choose **Wi-Fi**, and enter the laptop IP (e.g. `192.168.1.15:8080`) and the 4-digit code.
 4. Tap **Join**.
 
 > The app remembers the laptop IP via `SharedPreferences`. Next session you only need the 4-digit code (pass `--code 1234` to the server for a fixed code).
@@ -180,7 +194,7 @@ The app features a segmented USB / Wi-Fi toggle. Both modes use the same WebSock
 | **Python 3.10+** | 3.11 or 3.12 recommended (`pyvjoy` can fail on very new releases). |
 | **Android phone** | Android 8.0+ (API 26+), with a data USB cable. |
 | **vJoy** *(optional)* | Only needed for PC racing games. Dashboard + browser game work without it. |
-| **ADB** | Only needed for USB mode. Wi-Fi mode needs no ADB. |
+| **ADB** | Only needed for USB mode, and the server runs it for you. Wi-Fi mode needs no ADB. |
 
 ---
 
@@ -222,7 +236,7 @@ This installs `aiohttp` and `pyvjoy`. If `pyvjoy` fails on your Python version, 
 | Brake slider | Z axis |
 | Gear Up | Button 1 |
 | Gear Down | Button 2 |
-| Handbrake *(reserved)* | Button 3 |
+| Handbrake button (hold) | Button 3 |
 
 **Test vJoy alone:**
 ```powershell
@@ -275,16 +289,14 @@ adb install path\to\app-debug.apk
 ### Step 6 — Start the Server
 
 ```powershell
-# WebSocket mode (Dashboard + Browser Game + USB/Wi-Fi):
-python server/main.py --mode ws
-
-# Wired mode (Low-latency raw TCP over USB ADB):
-python server/main.py --mode wired
+# Normal start: dashboard + USB (automatic) + Wi-Fi + vJoy
+python server/main.py
 
 # Extra flags:
-python server/main.py --mode ws --no-vjoy     # dashboard only, no vJoy
-python server/main.py --mode ws --code 1234   # fixed pair code
-python server/main.py --mode ws --port 9090   # custom port
+python server/main.py --no-vjoy          # dashboard only, no vJoy
+python server/main.py --code 1234        # fixed Wi-Fi pair code
+python server/main.py --no-adb           # do not run adb (Wi-Fi only / manual USB)
+python server/main.py --no-auto-launch   # set up USB but do not open the app
 ```
 
 Open **`http://localhost:8080`** in your browser.
@@ -293,9 +305,9 @@ Open **`http://localhost:8080`** in your browser.
 
 ### Step 7 — Connect the Phone
 
-**USB:** `adb reverse tcp:8080 tcp:8080` → open SimWheel app → tap **USB**.
+**USB:** plug in the phone (the server sets up the tunnel and opens the app) → tap **☰** → **USB**.
 
-**Wi-Fi:** Open SimWheel app → tap **Wi-Fi** → enter laptop IP + 4-digit code → tap **Join**.
+**Wi-Fi:** open the SimWheel app → tap **☰** → **Wi-Fi** → enter laptop IP + 4-digit code → tap **Join**.
 
 ---
 
@@ -315,8 +327,8 @@ Open **`http://localhost:8080`** in your browser.
 3. **Tilt left/right** to steer. Locks at ±1.0 past 90° — never folds back.
 4. **Right thumb** → THROTTLE (green) to accelerate.
 5. **Left thumb** → BRAKE (red) to slow down.
-6. Gear paddle buttons on the inner edges of each side.
-7. Releasing any slider springs to zero — safe if you drop the phone.
+6. Gear paddle buttons on the inner edges of each side. Hold **HANDBRAKE** (under Gear Down) to engage the handbrake.
+7. Releasing any slider springs to zero. If the phone is actually dropped, the accelerometer detects the fall and all inputs are released automatically.
 8. Hit a cone in the browser game → phone vibrates (220 ms haptic).
 
 ---
@@ -326,19 +338,16 @@ Open **`http://localhost:8080`** in your browser.
 ```
 Sim-rig-Controller/
 ├── server/
-│   ├── main.py                  <- Unified entry point (--mode ws | wired)
+│   ├── main.py                  <- Entry point (python server/main.py)
 │   ├── requirements.txt         <- pyvjoy, aiohttp
 │   ├── common/
-│   │   ├── config.py            <- Ports, vJoy ranges, ADB path, button numbers
+│   │   ├── adb_utils.py         <- ADB helpers: device state, reverse tunnel, app launch
+│   │   ├── config.py            <- Port, vJoy ranges, ADB path, button numbers
 │   │   ├── mapping.py           <- Normalises floats to vJoy 0-32768 range
 │   │   └── vjoy_output.py       <- VJoyOutput class; run alone to test vJoy
 │   ├── websocket/
-│   │   ├── ws_server.py         <- aiohttp WebSocket hub + HTTP file server
+│   │   ├── ws_server.py         <- aiohttp WebSocket hub, HTTP file server, USB auto-setup
 │   │   └── test_client.py       <- Simulated phone for testing without the app
-│   └── wired/
-│       ├── main_wired.py        <- Entry point for raw TCP wired mode
-│       ├── tcp_server.py        <- TCP socket receiver (line-delimited JSON)
-│       └── adb_utils.py         <- ADB device check, reverse tunnel, app launch
 ├── game/
 │   └── dashboard.html           <- Single-file dashboard + canvas mini-game
 ├── SimWheel-App/                <- Android Studio project (Kotlin / Jetpack Compose)
@@ -346,8 +355,9 @@ Sim-rig-Controller/
 │       ├── MainActivity.kt      <- Root UI, orientation lock, vibration
 │       ├── NetworkClient.kt     <- OkHttp WebSocket, 60 Hz loop, ping/pong/vibrate
 │       ├── SteeringSensor.kt    <- Rotation vector -> normalised steering float
+│       ├── DropDetector.kt      <- Accelerometer free-fall detection (drop safety)
 │       ├── SimWheelState.kt     <- StateFlows for throttle, brake, gear
-│       └── Controls.kt          <- PedalSlider + GearButton Composables
+│       └── Controls.kt          <- PedalSlider, GearButton and HandbrakeButton Composables
 └── vjoy_output.py               <- Root-level backward-compat proxy (re-exports server/common)
 ```
 
@@ -356,7 +366,6 @@ Sim-rig-Controller/
 | Item | Default |
 |---|---|
 | WebSocket port | `8080` |
-| TCP (wired) port | `5555` |
 | vJoy device ID | `1` |
 | Axis range | `0x0000` – `0x8000` |
 | Phone package | `com.example.simwheel` |
@@ -411,18 +420,19 @@ Output: `SimWheel-App\app\build\outputs\apk\debug\app-debug.apk`
 
 | Symptom | Likely Cause & Fix |
 |---|---|
-| `adb not found` | ADB not on PATH. Redo Step 3 or set `ADB_PATH` in `config.py`. Reopen terminal after PATH changes. |
-| `No device found` | Charge-only cable, USB debugging off, or phone locked. Run `adb devices` to diagnose. |
+| Server prints `adb not found` | USB auto-setup is off (Wi-Fi still works). Put `platform-tools` on PATH, set `ADB_PATH` in `server/common/config.py`, or set `ANDROID_HOME`, then restart the server. |
+| Server prints `No phone attached over USB` | Charge-only cable, USB debugging off, or phone locked. Run `adb devices` to diagnose. |
 | `adb devices` shows `unauthorized` | Accept debugging prompt on phone. If it never appears: Developer Options → *Revoke USB debugging authorizations* → replug. |
-| `adb reverse failed` | Old adb server stuck. Run `adb kill-server`, then `adb start-server`, then retry. |
+| `adb reverse failed` | Old adb server stuck, or more than one device attached. Run `adb kill-server`, then `adb start-server`; the server retries every 3 s. |
 | `ModuleNotFoundError: pyvjoy` | pip installed into wrong Python. Use `python -m pip install -r server/requirements.txt`. |
 | vJoy errors / DLL not found | vJoy not installed, Device 1 not enabled in *Configure vJoy*, or another app holds the device. Restart PC after install. |
-| Phone shows "not connected" | Server not running or ADB reverse missing. App auto-retries every second. |
+| Phone shows "not connected" in USB mode | Check the server log says `USB tunnel ready`. If not, see the adb rows above. The app auto-retries every second. |
 | vJoy Monitor doesn't move | Check Device 1 has X/Y/Z enabled in *Configure vJoy*. |
 | Game doesn't see controller | Start `main.py` before launching game. Select vJoy in game's controller settings. |
 | Steering inverted | Use game's axis invert, or set `direction = -1f` in `SteeringSensor.kt`. |
 | Steering folds back past 90 degrees | Fixed bug — update to latest `SteeringSensor.kt`. |
 | Garbled traceback / Unhandled exception on Ctrl+C | Fixed — server now uses `WindowsSelectorEventLoopPolicy`. Update `ws_server.py`. |
+| Phone says "Drop detected" while driving | A very hard jolt briefly read as free fall. Raise the 80 ms hold time (`FREE_FALL_MIN_NS`) or lower the 2.5 m/s² threshold in `DropDetector.kt`. |
 | `Address already in use` | Previous server still running. Close it and retry. |
 | App won't install | Phone below Android 8.0 (API 26), or APK for wrong CPU ABI. |
 | Gradle sync fails | JDK 11+ not installed or `JAVA_HOME` not set. |

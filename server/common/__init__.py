@@ -4,7 +4,6 @@ from server.common.mapping import normalize
 from server.common.config import (
     HOST,
     DEFAULT_WS_PORT,
-    DEFAULT_TCP_PORT,
     VJOY_DEVICE_ID,
     ADB_PATH,
     ANDROID_PACKAGE,
@@ -19,7 +18,6 @@ __all__ = [
     "normalize",
     "HOST",
     "DEFAULT_WS_PORT",
-    "DEFAULT_TCP_PORT",
     "VJOY_DEVICE_ID",
     "ADB_PATH",
     "ANDROID_PACKAGE",

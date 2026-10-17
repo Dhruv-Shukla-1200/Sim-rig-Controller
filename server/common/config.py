@@ -5,11 +5,6 @@ import shutil
 # --- Networking ---
 HOST = "0.0.0.0"
 DEFAULT_WS_PORT = 8080
-DEFAULT_TCP_PORT = 5555
-
-# Backward compatibility aliases
-PORT = DEFAULT_TCP_PORT
-TCP_PORT = DEFAULT_TCP_PORT
 
 # --- vJoy Device ---
 VJOY_DEVICE_ID = 1
@@ -38,8 +33,12 @@ def resolve_adb_path() -> str:
     candidates = [
         os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\platform-tools\adb.exe"),
-        r"C:\Users\DHRUV\AppData\Local\platform-tools\adb.exe",
     ]
+    for env_var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        sdk = os.environ.get(env_var)
+        if sdk:
+            candidates.append(os.path.join(sdk, "platform-tools", "adb.exe"))
+            candidates.append(os.path.join(sdk, "platform-tools", "adb"))
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate

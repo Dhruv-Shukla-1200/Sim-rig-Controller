@@ -56,6 +56,7 @@ code{font-family:Consolas,monospace;font-size:13px;background:var(--asphalt);
 .lamp{padding:4px 10px;border:1px solid var(--line);border-radius:6px;
   font-size:13px;color:var(--muted)}
 .lamp.on{background:var(--steer);border-color:var(--steer);color:#06222f;font-weight:600}
+.lamp.brake.on{background:var(--stop);border-color:var(--stop);color:#2b0a07}
 
 /* latency */
 .lat{display:flex;align-items:baseline;gap:8px}
@@ -116,7 +117,7 @@ code{font-family:Consolas,monospace;font-size:13px;background:var(--asphalt);
       </div>
       <div class="readout">
         <div><span class="num steerval" id="steerVal">0.00</span> <span class="addr">steering</span></div>
-        <div class="gears"><span class="lamp" id="gDown">Gear down</span><span class="lamp" id="gUp">Gear up</span></div>
+        <div class="gears"><span class="lamp" id="gDown">Gear down</span><span class="lamp" id="gUp">Gear up</span><span class="lamp brake" id="hb">Handbrake</span></div>
       </div>
     </section>
 
@@ -147,7 +148,7 @@ code{font-family:Consolas,monospace;font-size:13px;background:var(--asphalt);
 <script>
 const $ = id => document.getElementById(id);
 const S = {server:false, phone:false, mode:null, vjoy:false, hz:0,
-  steering:0, throttle:0, brake:0, gearUp:0, gearDown:0, rtt:null, jitter:null};
+  steering:0, throttle:0, brake:0, gearUp:0, gearDown:0, handbrake:false, rtt:null, jitter:null};
 const rtts = [];
 
 /* ---------- connection to the server, with automatic reconnect ---------- */
@@ -169,7 +170,7 @@ function connect(){
   dashWs.onclose = () => { S.server = false; S.phone = false; zeroInput(); dashWs = null; setTimeout(connect, 1000); };
   dashWs.onmessage = e => handle(JSON.parse(e.data));
 }
-function zeroInput(){ S.steering = S.throttle = S.brake = 0; }
+function zeroInput(){ S.steering = S.throttle = S.brake = 0; S.handbrake = false; }
 function handle(m){
   if (m.type === 'hello'){
     const addrs = m.addresses || m.ips || [];
@@ -192,6 +193,7 @@ function handle(m){
     const t = performance.now();
     if (m.gear_up) S.gearUp = t;
     if (m.gear_down) S.gearDown = t;
+    S.handbrake = m.handbrake === true;
   } else if (m.type === 'latency'){
     S.rtt = m.rtt; S.jitter = m.jitter;
     rtts.push(m.rtt); if (rtts.length > 60) rtts.shift();
@@ -219,6 +221,7 @@ function render(){
   const now = performance.now();
   $('gUp').classList.toggle('on', now - S.gearUp < 250);
   $('gDown').classList.toggle('on', now - S.gearDown < 250);
+  $('hb').classList.toggle('on', S.handbrake);
 
   $('rtt').textContent = S.rtt == null ? '--' : S.rtt.toFixed(0);
   $('jit').textContent = S.jitter == null ? '--' : S.jitter.toFixed(1);
@@ -253,6 +256,7 @@ function stepGame(dt){
   const thr = on ? S.throttle : 0, brk = on ? S.brake : 0;
   G.speed += (thr * 220 - G.speed) * Math.min(1, dt * 0.9);
   G.speed -= brk * dt * 260;
+  if (on && S.handbrake) G.speed -= dt * 420;   // handbrake stops the car hard
   if (thr === 0) G.speed *= Math.max(0, 1 - dt * 0.25);
   if (G.speed < 0.5) G.speed = 0;
 
